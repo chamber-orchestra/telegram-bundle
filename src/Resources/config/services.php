@@ -20,7 +20,7 @@ return static function (ContainerConfigurator $container): void {
         ->tag('telegram.action.handler');
 
     $services->load('ChamberOrchestra\\TelegramBundle\\', '../../')
-        ->exclude('../../{DependencyInjection,Resources,Exception,Entity,Form/Data,Contracts,Attribute,tests}');
+        ->exclude('../../{DependencyInjection,Resources,Exception,Entity,Form/Data,Contracts,Attribute,Messenger/Message,tests}');
 
     $services->set(ActionHandlerResolver::class)
         ->autowire()
