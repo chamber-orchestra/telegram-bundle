@@ -1,6 +1,6 @@
 # chamber-orchestra/telegram-bundle
 
-Symfony 8 bundle for building Telegram bots — attribute-based routing, filter system, view/keyboard DSL, async webhook processing.
+Symfony 8 bundle for building Telegram bots — HttpKernel sub-request routing, view/keyboard DSL, async webhook processing.
 
 ## Commands
 
@@ -16,7 +16,7 @@ vendor/bin/php-cs-fixer fix --dry-run   # Check only
 # Static analysis
 vendor/bin/phpstan analyse              # Run PHPStan
 
-# Scaffold a new handler (run from the host project)
+# Scaffold a new action controller (run from the host project)
 php bin/console make:telegram:handler
 ```
 
@@ -29,52 +29,91 @@ POST /telegram/webhook
   → WebhookController (dispatches TelegramWebhookMessage to AMQP)
   → TelegramWebhookHandler (async)
       → dispatches TelegramRequestEvent
-      → ActionHandlerResolver (matches via #[TelegramRoute] + Filter)
-      → dispatches TelegramActionResolvedEvent
-      → ConcreteHandler::__invoke(AbstractData $dto)
-          → View::render() → Telegram::send() → Telegram API
-          → dispatches TelegramMessageSentEvent
+      → TelegramRequestFactory::createFromPayload($payload)
+          → maps to fake URL: /telegram/cmd/start, /telegram/callback/path, etc.
+      → HttpKernelInterface::handle($request, SUB_REQUEST)
+          → Symfony routing matches route attribute on action controller
+          → TelegramUserValueResolver resolves User argument (optional)
+          → controller returns ViewInterface
+          → TelegramViewSubscriber (kernel.view, priority 10) renders via Telegram API
 ```
 
 ### Adding a Handler
 
 ```php
-#[TelegramRoute(new TextFilter('/hello'))]
-class HelloHandler extends AbstractActionHandler
+#[Route('/telegram/cmd/hello', name: 'telegram_cmd_hello')]
+class HelloAction
 {
-    public function __invoke(AbstractData $dto): void
+    public function __invoke(Request $request): ViewInterface
     {
-        $this->renderer->render(new TextView('Hello!'), $dto->getId());
+        return new TextView('Hello!');
     }
 }
 ```
 
-Tag the service as `telegram.action.handler` (done automatically via `instanceof` rule).
+Register in your `config/services/telegram.yaml` as a public controller (or use autoconfiguration).
+
+### URL Scheme
+
+| Trigger | URL | Method |
+|---|---|---|
+| `/command` text message | `/telegram/cmd/command` | GET |
+| Plain text (no slash) | `/telegram/message` | GET |
+| Callback query with `path` key | `/telegram/callback/{path}` | POST |
+| `my_chat_member` update | `/telegram/member/{status}` | GET |
+
+### Request Attributes (available in all controllers)
+
+| Attribute | Type | Description |
+|---|---|---|
+| `_chat_id` | string | Chat ID to reply to |
+| `_telegram_user_id` | string | Sender's Telegram user ID |
+| `_telegram_payload` | array | Full raw webhook payload |
+| `_callback_data` | array | Decoded callback data (callback routes only) |
+| `_callback_query_id` | string | Callback query ID (callback routes only) |
 
 ### Key Classes
 
 | Class | Description |
 |---|---|
-| `AbstractActionHandler` | Base for all handlers; provides `$telegram`, `$renderer`, `$bus`, `$dispatcher`, `$logger` via `#[Required]` setters |
-| `#[TelegramRoute]` | Attribute accepting one or an array of `FilterInterface` |
-| `TextFilter` | Matches `message.text` case-insensitively |
-| `CallbackFilter` | Matches `callback_query.data` JSON key/value |
-| `DataFactory` | Maps raw webhook payload → typed DTO (`MessageData`, `CallbackQueryData`, etc.) |
-| `ActionHandlerResolver` | Iterates tagged handlers, tests filters, falls back to `FallbackHandler` |
+| `TelegramRequestFactory` | Maps raw payload → synthetic `Request` with fake URL |
+| `TelegramUserValueResolver` | Resolves a User entity argument via `TelegramUserProviderInterface` |
+| `TelegramViewSubscriber` | `kernel.view` listener (priority 10); renders `ViewInterface` via Telegram API |
+| `TelegramExceptionSubscriber` | `kernel.exception` listener; prevents sub-request exceptions from crashing the worker |
 | `Telegram` | HTTP client wrapper; routes to async queue or synchronous multipart |
 | `MessageRenderer` | Calls `Telegram::send()` with view data |
 | `TextView` | Plain/HTML message |
-| `ImageView` / `VideoView` / `DocumentView` | File uploads (async via path) |
-| `MediaGroupView` | Multi-file group (synchronous, uses `DataPart`) |
+| `ImageView` / `VideoView` / `DocumentView` | File uploads |
+| `MediaGroupView` | Multi-file album (synchronous) |
 | `LinkView` / `LoginLinkView` | Inline buttons with URL / login_url |
-| `CollectionView` | Multiple messages in one handler call |
+| `CollectionView` | Multiple messages — `TelegramViewSubscriber` iterates its views |
+
+### User Resolution
+
+Implement `TelegramUserProviderInterface` to let the bundle auto-resolve your User entity:
+
+```php
+// In your app:
+class UserTelegramProvider implements TelegramUserProviderInterface
+{
+    public function loadByTelegramId(string $telegramUserId): ?User
+    {
+        return $this->repository->findOneByTelegramId($telegramUserId);
+    }
+}
+```
+
+Then declare the argument in your controller:
+
+```php
+public function __invoke(Request $request, ?User $user): ViewInterface { … }
+```
 
 ### Events
 
 | Event | When |
 |---|---|
-| `TelegramRequestEvent` | Before handler resolution (use to persist `BotRequest`) |
-| `TelegramActionResolvedEvent` | After resolver picks the handler |
+| `TelegramRequestEvent` | Before sub-request (use to persist `BotRequest`) |
 | `TelegramMessageSentEvent` | After successful Telegram API call (use to persist `BotResponse`) |
 
 ### Bundle Configuration
@@ -91,28 +130,24 @@ chamber_orchestra_telegram:
 
 ```
 src/
-  Attribute/TelegramRoute.php
-  Client/Telegram.php
-  Contracts/Handler/HandlerInterface.php
+  Client/Telegram.php, TelegramClient.php
+  Contracts/Token/TokenProviderInterface.php
+  Contracts/User/TelegramUserProviderInterface.php
+  Contracts/View/ViewInterface.php
   Controller/WebhookController.php
   DependencyInjection/
-  Event/
+  Event/TelegramRequestEvent.php, TelegramMessageSentEvent.php
+  EventSubscriber/TelegramViewSubscriber.php, TelegramExceptionSubscriber.php
   Exception/
-  Filter/TextFilter.php, CallbackFilter.php
-  Form/Data/          ← DTOs (MessageData, CallbackQueryData, …)
-  Handler/AbstractActionHandler.php, FallbackHandler.php
-  Helper/MessageRenderer.php, ViewHelper.php, MessageHelper.php
+  Http/TelegramRequestFactory.php, TelegramUserValueResolver.php
   Maker/MakeTelegramHandler.php
   Messenger/Handler/TelegramWebhookHandler.php, SendMessageHandler.php
   Messenger/Message/TelegramWebhookMessage.php, SendMessage.php
-  Model/              ← OptionsCollection, CallbackOption, LinkOption, …
-  Resolver/ActionHandlerResolver.php
-  View/               ← TextView, ImageView, VideoView, …
+  Model/OptionsCollection.php, CallbackOption.php, LinkOption.php, …
+  View/TextView.php, ImageView.php, VideoView.php, CollectionView.php, …
 tests/
   Fixtures/Payloads.php
-  Filter/
-  Form/Data/
-  Messenger/Handler/
-  Resolver/
+  Http/TelegramRequestFactoryTest.php
+  Messenger/Handler/TelegramWebhookHandlerTest.php
   View/
 ```
