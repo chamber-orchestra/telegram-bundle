@@ -18,7 +18,12 @@
     },
     "require-dev": {
         "phpunit/phpunit": "^13.0",
-        "friendsofphp/php-cs-fixer": "^3.94"
+        "friendsofphp/php-cs-fixer": "^3.94",
+        "phpstan/phpstan": "^2.0",
+        "symfony/maker-bundle": "^1.60"
+    },
+    "suggest": {
+        "symfony/maker-bundle": "Allows generating handler classes via make:telegram:handler"
     },
     "autoload": {
         "psr-4": {
@@ -27,7 +32,7 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Tests\\": "tests/"
+            "ChamberOrchestra\\TelegramBundle\\Tests\\": "tests/"
         }
     },
     "minimum-stability": "stable",

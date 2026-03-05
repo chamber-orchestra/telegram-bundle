@@ -7,7 +7,7 @@ namespace ChamberOrchestra\TelegramBundle\Exception;
 use Symfony\Component\HttpClient\Exception\HttpExceptionTrait;
 use Symfony\Contracts\HttpClient\Exception\ClientExceptionInterface;
 
-class ClientException extends \RuntimeException implements ClientExceptionInterface
+class ClientException extends \RuntimeException implements ClientExceptionInterface, ExceptionInterface
 {
     use HttpExceptionTrait;
 }

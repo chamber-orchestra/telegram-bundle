@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace ChamberOrchestra\TelegramBundle\Client;
 
 use ChamberOrchestra\TelegramBundle\Contracts\Token\TokenProviderInterface;
+use ChamberOrchestra\TelegramBundle\Event\TelegramMessageSentEvent;
 use ChamberOrchestra\TelegramBundle\Exception\ClientException;
-use ChamberOrchestra\TelegramBundle\Messenger\Message\CreateBotResponseMessage;
 use ChamberOrchestra\TelegramBundle\Messenger\Message\SendMessage;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Mime\Part\DataPart;
 
 class Telegram
 {
@@ -21,30 +23,41 @@ class Telegram
         private readonly TokenProviderInterface $tokenProvider,
         private readonly MessageBusInterface $bus,
         private readonly LoggerInterface $logger,
+        private readonly EventDispatcherInterface $dispatcher,
     ) {
     }
 
+    private const array FILE_FIELDS = ['photo_path', 'video_path', 'video_note_path', 'thumbnail_path', 'document_path'];
+
     /**
      * Dispatch via message queue (non-blocking).
+     * File paths are serialized as strings and opened by doSend() in the worker.
+     * DataPart objects (e.g. MediaGroupView) cannot be serialized — sent synchronously.
      */
     public function send(string $method, string $chatId, array $data, string $type = 'request'): void
     {
-        foreach (['photo_path', 'video_path', 'thumbnail_path', 'document_path'] as $field) {
-            unset($data[$field]);
+        foreach ($data as $value) {
+            if ($value instanceof DataPart) {
+                $this->multipart($method, $chatId, $data);
+                return;
+            }
         }
 
-        $this->bus->dispatch(new SendMessage($method, $data, $chatId, $type));
+        $hasFile = \array_any(self::FILE_FIELDS, fn(string $f) => !empty($data[$f]));
+
+        $this->bus->dispatch(new SendMessage($method, $data, $chatId, $hasFile ? 'multipart' : $type));
     }
 
     /**
-     * Send immediately (blocking), used for multipart (files).
+     * Send immediately (blocking) as multipart/form-data.
+     * Used directly for MediaGroupView and by doSend() for file views.
      */
     public function multipart(string $method, string $chatId, array $data): array
     {
         $response = $this->client()->multipart($method, \array_merge($data, ['chat_id' => $chatId]));
 
         if (self::EDIT_MESSAGE_REPLY_MARKUP !== $method) {
-            $this->bus->dispatch(CreateBotResponseMessage::create($response));
+            $this->dispatcher->dispatch(new TelegramMessageSentEvent($response, $method));
         }
 
         return $response;
@@ -55,17 +68,17 @@ class Telegram
      */
     public function doSend(string $method, string $chatId, array $data, string $type = 'request'): array
     {
-        $resources = [];
         $fields = [
-            'photo_path' => 'photo',
-            'video_path' => 'video',
-            'thumbnail_path' => 'thumbnail',
-            'document_path' => 'document',
+            'photo_path'      => 'photo',
+            'video_path'      => 'video',
+            'video_note_path' => 'video_note',
+            'thumbnail_path'  => 'thumbnail',
+            'document_path'   => 'document',
         ];
 
         foreach ($fields as $key => $param) {
             if (!empty($data[$key])) {
-                $data[$param] = $resources[] = \fopen($data[$key], 'r');
+                $data[$param] = DataPart::fromPath($data[$key]);
                 unset($data[$key]);
             }
         }
@@ -79,17 +92,13 @@ class Telegram
             };
 
             if (self::EDIT_MESSAGE_REPLY_MARKUP !== $method) {
-                $this->bus->dispatch(CreateBotResponseMessage::create($response));
+                $this->dispatcher->dispatch(new TelegramMessageSentEvent($response, $method));
             }
         } catch (ClientException $e) {
             $this->logger->critical(\sprintf('Telegram client error: %s', $method), [
                 'data' => \array_merge($data, ['chat_id' => $chatId]),
                 'error' => $e->getResponse()->getContent(false),
             ]);
-        } finally {
-            foreach ($resources as $resource) {
-                \fclose($resource);
-            }
         }
 
         return $response;

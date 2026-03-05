@@ -14,7 +14,14 @@ class ChamberOrchestraTelegramExtension extends Extension
 {
     public function load(array $configs, ContainerBuilder $container): void
     {
-        $loader = new PhpFileLoader($container, new FileLocator(__DIR__.'/../Resources/config'));
+        $config = $this->processConfiguration(new Configuration(), $configs);
+
+        $container->setParameter('chamber_orchestra_telegram.rate_limiter', $config['rate_limiter']);
+        $container->setParameter('chamber_orchestra_telegram.logger_channel', $config['logger_channel']);
+        $container->setParameter('chamber_orchestra_telegram.bus', $config['bus']);
+        $container->setParameter('chamber_orchestra_telegram.fallback_handler', $config['fallback_handler']);
+
+        $loader = new PhpFileLoader($container, new FileLocator(__DIR__ . '/../Resources/config'));
         $loader->load('services.php');
 
         $container

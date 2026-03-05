@@ -17,6 +17,7 @@ class ActionHandlerResolver
         private readonly iterable $handlers,
         #[Autowire('%kernel.debug%')]
         private readonly bool $debug,
+        private readonly string $fallbackHandlerClass = FallbackHandler::class,
     ) {
     }
 
@@ -36,7 +37,7 @@ class ActionHandlerResolver
             }
         }
 
-        return $this->getHandlerByClassName(FallbackHandler::class);
+        return $this->getHandlerByClassName($this->fallbackHandlerClass);
     }
 
     public function getHandlerByClassName(string $class): HandlerInterface
