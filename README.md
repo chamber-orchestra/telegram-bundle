@@ -358,7 +358,7 @@ objects cannot be serialized for the queue.
 
 ## Requirements
 
-- PHP 8.4+
+- PHP 8.5+
 - Symfony 8.0+
 - Symfony Messenger with an async transport (AMQP recommended)
 
